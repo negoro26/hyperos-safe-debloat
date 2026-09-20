@@ -84,8 +84,7 @@ Package selections in this project come from a direct audit of live devices and 
    Amnesty International's Mobile Verification Toolkit scanned installed package identifiers, active memory processes, and system properties against 11,481 indicators of compromise covering Pegasus, Predator, and commercial stalkerware families to confirm the device baseline was clean.
 
 3. Cross-referencing the Universal Android Debloater database.
-   Installed packages were matched against the UAD-NG database to identify community safety ratings. Packages marked unsafe, such as `com.miui.rom`, `com.android.updater`, and low-level telephony overlays, are excluded to prevent bootloops. The tool ships with `uad_lists.json` bundled locally and can sync fresh updates directly from the UAD-NG upstream repository.
-
+   Installed packages were matched against the UAD-NG database to identify community safety ratings. Packages marked unsafe, such as `com.miui.rom`, `com.android.updater`, and low-level telephony overlays, are excluded to prevent bootloops. The tool automatically fetches `uad_lists.json` directly from the official UAD-NG GitHub repository on execution and caches it locally, keeping package ratings synchronized without committing static database files.
 4. Resolving the Android 14+ SecurityException.
    Modern HyperOS blocks `pm disable-user` on system packages like Joyose, returning `SecurityException: Cannot disable system packages`. Conventional debloaters often resort to `pm uninstall --user 0`, which removes package registrations and risks breaking dependent system services. This tool uses Android's AppOps mechanism (`RUN_IN_BACKGROUND: ignore`, `RUN_ANY_IN_BACKGROUND: ignore`, `WAKE_LOCK: ignore`) to freeze the package and halt background execution while leaving the underlying files untouched.
 
@@ -127,7 +126,7 @@ Package selections in this project come from a direct audit of live devices and 
 
 ## How to use
 
-Check package status against the bundled UAD-NG database:
+Check package status against the official UAD-NG database:
 ```bash
 python hyperos_debloat.py status --source uad
 ```

@@ -15,8 +15,9 @@ import urllib.request
 from pathlib import Path
 
 UAD_URL = "https://raw.githubusercontent.com/Universal-Debloater-Alliance/universal-android-debloater-next-generation/main/resources/assets/uad_lists.json"
-UAD_LOCAL_FILE = Path(__file__).parent / "uad_lists.json"
-
+UAD_CACHE_DIR = Path.home() / ".cache" / "hyperos_debloat"
+UAD_CACHE_FILE = UAD_CACHE_DIR / "uad_lists.json"
+UAD_CACHE_TTL_SECONDS = 86400  # 24 hours
 # Exit codes for agentic workflows
 EXIT_SUCCESS = 0
 EXIT_ERROR = 1
@@ -111,27 +112,37 @@ def get_device_info(adb_bin):
     }
 
 
-def load_uad_database():
-    """Load or download UAD-NG database."""
-    if not UAD_LOCAL_FILE.exists():
+def load_uad_database(force_refresh=False):
+    """Load or automatically download UAD-NG database from GitHub."""
+    import time
+    UAD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    need_download = force_refresh or not UAD_CACHE_FILE.exists()
+    if not need_download and UAD_CACHE_FILE.exists():
+        age = time.time() - UAD_CACHE_FILE.stat().st_mtime
+        if age > UAD_CACHE_TTL_SECONDS:
+            need_download = True
+
+    if need_download:
         try:
-            urllib.request.urlretrieve(UAD_URL, UAD_LOCAL_FILE)
+            urllib.request.urlretrieve(UAD_URL, UAD_CACHE_FILE)
         except Exception:
-            return {}
+            if not UAD_CACHE_FILE.exists():
+                return {}
 
     try:
-        with open(UAD_LOCAL_FILE, "r", encoding="utf-8") as f:
+        with open(UAD_CACHE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
 
 
 def sync_uad():
-    """Force refresh UAD-NG database from GitHub."""
+    """Force refresh UAD-NG database from official GitHub repository."""
+    UAD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        urllib.request.urlretrieve(UAD_URL, UAD_LOCAL_FILE)
-        size_kb = UAD_LOCAL_FILE.stat().st_size / 1024
-        return {"status": "success", "file": str(UAD_LOCAL_FILE), "size_kb": round(size_kb, 1)}
+        urllib.request.urlretrieve(UAD_URL, UAD_CACHE_FILE)
+        size_kb = UAD_CACHE_FILE.stat().st_size / 1024
+        return {"status": "success", "file": str(UAD_CACHE_FILE), "size_kb": round(size_kb, 1)}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -142,7 +153,7 @@ def get_installed_packages(adb_bin):
     return {line.replace("package:", "").strip() for line in out.splitlines() if line.startswith("package:")}
 
 
-def get_target_packages(adb_bin, source="uad"):
+def get_target_packages(adb_bin, source="uad", force_refresh=False):
     """
     Build package targets dictionary based on source selection:
     - 'preset': hand-audited Xiaomi packages
@@ -152,7 +163,7 @@ def get_target_packages(adb_bin, source="uad"):
     if source == "preset":
         return AUDITED_PRESETS
 
-    uad_data = load_uad_database()
+    uad_data = load_uad_database(force_refresh=force_refresh)
     if not uad_data:
         return AUDITED_PRESETS
 
@@ -219,10 +230,10 @@ def check_appops_restricted(adb_bin, pkg):
     return "ignore" in out.lower()
 
 
-def get_device_status(adb_bin, source="uad"):
+def get_device_status(adb_bin, source="uad", force_refresh=False):
     """Programmatic API: Gather status of all tracked packages."""
     info = get_device_info(adb_bin)
-    targets = get_target_packages(adb_bin, source=source)
+    targets = get_target_packages(adb_bin, source=source, force_refresh=force_refresh)
 
     results = {
         "device": info,
@@ -260,10 +271,10 @@ def get_device_status(adb_bin, source="uad"):
     return results
 
 
-def apply_debloat(adb_bin, source="uad", dry_run=False):
+def apply_debloat(adb_bin, source="uad", dry_run=False, force_refresh=False):
     """Programmatic API: Apply safe debloat rules with AppOps fallback."""
     info = get_device_info(adb_bin)
-    targets = get_target_packages(adb_bin, source=source)
+    targets = get_target_packages(adb_bin, source=source, force_refresh=force_refresh)
 
     log = []
     actions_taken = {"disabled": 0, "appops_restricted": 0, "skipped": 0, "already_disabled": 0}
@@ -418,6 +429,11 @@ def main():
         help="Preview changes without executing",
     )
     parser.add_argument(
+        "--refresh-uad",
+        action="store_true",
+        help="Force re-download of UAD-NG database from GitHub",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Emit pure, parseable JSON for automated agents",
@@ -442,7 +458,7 @@ def main():
         sys.exit(EXIT_NO_DEVICE)
 
     if args.action == "status":
-        res = get_device_status(adb_bin, source=args.source)
+        res = get_device_status(adb_bin, source=args.source, force_refresh=args.refresh_uad)
         if args.json:
             print(json.dumps(res, indent=2))
         else:
@@ -461,7 +477,7 @@ def main():
         sys.exit(EXIT_SUCCESS)
 
     elif args.action == "debloat":
-        res = apply_debloat(adb_bin, source=args.source, dry_run=args.dry_run)
+        res = apply_debloat(adb_bin, source=args.source, dry_run=args.dry_run, force_refresh=args.refresh_uad)
         if args.json:
             print(json.dumps(res, indent=2))
         else:
