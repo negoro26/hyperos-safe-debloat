@@ -4,22 +4,22 @@ A guide and toolset to audit, inspect, and safely debloat Xiaomi HyperOS and MIU
 
 ## Audit methodology
 
-Package selections in this project come from a direct audit of a live device, rather than unverified debloat lists.
+Package selections in this project come from a direct audit of live devices and the community-curated Universal Android Debloater database.
 
 1. Bytecode decompilation with Droid ASC.
-   Installed APK files were extracted from device partitions and decompiled using Droid ASC. Inspecting classes in `com.xiaomi.joyose` revealed the embedded OneTrack SDK communicating with tracking endpoints including `tracking.intl.miui.com` and `sdkconfig.ad.xiaomi.com`. Decompiling `com.miui.android.fashiongallery` confirmed embedded InMobi, Google AdMob, and Glance SDK ad components running inside the lock screen application.
+   Installed APK files were extracted from device partitions and decompiled using Droid ASC. Inspecting classes in `com.xiaomi.joyose` revealed the embedded OneTrack SDK communicating with tracking domains including `tracking.intl.miui.com` and `sdkconfig.ad.xiaomi.com`. Decompiling `com.miui.android.fashiongallery` confirmed embedded InMobi, Google AdMob, and Glance SDK ad components running inside the lock screen application.
 
 2. Forensic spyware scan with MVT.
    Amnesty International's Mobile Verification Toolkit scanned installed package identifiers, active memory processes, and system properties against 11,481 indicators of compromise covering Pegasus, Predator, and commercial stalkerware families to confirm the device baseline was clean.
 
 3. Cross-referencing the Universal Android Debloater database.
-   Installed packages were matched against the UAD-NG database to identify community safety ratings. Packages marked unsafe, such as `com.miui.rom`, `com.android.updater`, and low-level telephony overlays, are excluded to prevent bootloops.
+   Installed packages were matched against the UAD-NG database to identify community safety ratings. Packages marked unsafe, such as `com.miui.rom`, `com.android.updater`, and low-level telephony overlays, are excluded to prevent bootloops. The tool ships with `uad_lists.json` bundled locally and can sync fresh updates directly from the UAD-NG upstream repository.
 
 4. Resolving the Android 14+ SecurityException.
    Modern HyperOS blocks `pm disable-user` on system packages like Joyose, returning `SecurityException: Cannot disable system packages`. Conventional debloaters often resort to `pm uninstall --user 0`, which removes package registrations and risks breaking dependent system services. This tool uses Android's AppOps mechanism (`RUN_IN_BACKGROUND: ignore`, `RUN_ANY_IN_BACKGROUND: ignore`, `WAKE_LOCK: ignore`) to freeze the package and halt background execution while leaving the underlying files untouched.
 
-5. Hardware and biometric protection.
-   Optical and Goodix in-display fingerprint components (`com.goodix.fingerprint.setting`, `com.fingerprints.optical`) remain whitelisted to ensure biometric authentication continues to function.
+5. Hardware, biometric, and connectivity protection.
+   Optical and Goodix in-display fingerprint components (`com.goodix.fingerprint.setting`, `com.fingerprints.optical`) and Xiaomi Virtual SIM roaming services (`com.miui.vsimcore`) remain whitelisted so biometric authentication and data roaming continue to function.
 
 ## Target packages
 
@@ -29,6 +29,7 @@ Package selections in this project come from a direct audit of a live device, ra
 | `com.miui.android.fashiongallery` | Lock screen wallpaper carousel and Glance ad network | Disables for user 0 |
 | `com.amazon.appmanager` | Preloaded partner telemetry stub | Disables for user 0 |
 | `com.mi.global.bbs` | Xiaomi Community app | Disables for user 0 |
+| `com.mi.global.shop` | Xiaomi Global Shop store app | Disables for user 0 |
 | `com.miui.audiomonitor` | Background audio recording monitor | Ignores background execution via AppOps |
 | `com.bsp.logmanager` | Hardware logging daemon | Ignores background execution via AppOps |
 | `com.debug.loggerui` | MediaTek logging interface | Ignores background execution via AppOps |
@@ -55,9 +56,14 @@ Package selections in this project come from a direct audit of a live device, ra
 
 ## How to use
 
-Check package status:
+Check package status against the bundled UAD-NG database:
 ```bash
-python hyperos_debloat.py status
+python hyperos_debloat.py status --source uad
+```
+
+Check package status against the audited preset list:
+```bash
+python hyperos_debloat.py status --source preset
 ```
 
 Preview changes without modifying the device:
@@ -65,9 +71,14 @@ Preview changes without modifying the device:
 python hyperos_debloat.py debloat --dry-run
 ```
 
-Apply the debloat rules:
+Apply safe debloat using UAD-NG recommended list with AppOps fallback:
 ```bash
-python hyperos_debloat.py debloat
+python hyperos_debloat.py debloat --source uad
+```
+
+Update the local UAD-NG database from upstream:
+```bash
+python hyperos_debloat.py sync-uad
 ```
 
 Run an MVT forensic scan against Amnesty International indicators:
