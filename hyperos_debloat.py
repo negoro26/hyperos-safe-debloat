@@ -20,6 +20,8 @@ TARGET_PACKAGES = {
         ("com.amazon.appmanager", "Amazon preload telemetry stub"),
         ("com.mi.global.bbs", "Xiaomi Community application"),
         ("com.miui.audiomonitor", "Background audio recording monitor service"),
+        ("com.amazon.appmanager", "Amazon preload telemetry stub"),
+        ("com.mi.global.shop", "Xiaomi Global Shop store application"),
     ],
     "Factory, Diagnostic, and Hardware Loggers": [
         ("com.bsp.logmanager", "Board Support Package hardware logging daemon"),
