@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "hyperos_debloat",
+  "description": "Audit, inspect, and safely debloat Xiaomi HyperOS and MIUI devices over ADB. Uses AppOps background freeze fallback for Android 14+ protected system packages and safeguards biometric drivers.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["status", "debloat", "restore", "dexopt", "scan-spyware", "audit-apk", "sync-uad"],
+        "description": "Action to perform on the connected device."
+      },
+      "source": {
+        "type": "string",
+        "enum": ["uad", "preset", "all"],
+        "default": "uad",
+        "description": "Package database to consult: 'uad' for UAD-NG recommended list, 'preset' for curated list, or 'all' for both."
+      },
+      "package": {
+        "type": "string",
+        "description": "Target package name for audit-apk action (for example: 'com.xiaomi.joyose')."
+      },
+      "dry_run": {
+        "type": "boolean",
+        "default": false,
+        "description": "Simulate debloat without applying changes."
+      }
+    },
+    "required": ["action"]
+  }
+}

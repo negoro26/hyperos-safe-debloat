@@ -1,6 +1,77 @@
 # HyperOS safe debloat
 
-A guide and toolset to audit, inspect, and safely debloat Xiaomi HyperOS and MIUI devices running Android 14, 15, and 16 over ADB.
+A guide, toolset, and agentic interface to audit, inspect, and safely debloat Xiaomi HyperOS and MIUI devices running Android 14, 15, and 16 over ADB.
+
+## Agentic integration
+
+This tool is built for automated agents, coding harnesses, and LLMs running terminal tools.
+
+### Machine-readable output
+
+Every command accepts the `--json` flag. When enabled, the tool suppresses interactive formatting and prints valid JSON to standard output.
+
+```bash
+# Query package status as JSON
+python hyperos_debloat.py status --json
+
+# Run safe debloat in dry-run mode
+python hyperos_debloat.py debloat --dry-run --json
+
+# Run forensic spyware check
+python hyperos_debloat.py scan-spyware --json
+```
+
+Example JSON response for `status --json`:
+```json
+{
+  "device": {
+    "model": "2406APNFAG",
+    "manufacturer": "Xiaomi",
+    "version": "16",
+    "patch": "2026-08-01"
+  },
+  "source": "uad",
+  "summary": {
+    "total": 24,
+    "enabled": 4,
+    "disabled": 8,
+    "appops_restricted": 12,
+    "not_found": 0
+  },
+  "categories": { ... }
+}
+```
+
+### Exit code contract
+
+| Exit code | Meaning |
+| :--- | :--- |
+| `0` | Success or clean scan result |
+| `1` | General error, invalid argument, or threat detected |
+| `2` | Device disconnected or unauthorized over ADB |
+
+### Tool calling schema
+
+The repository includes `tool_schema.json`. It provides a standard JSON Schema function declaration for direct integration into OpenAI, Anthropic, or custom agent tool registries.
+
+### Python library usage
+
+Agents can import functions directly without invoking subprocesses:
+
+```python
+from hyperos_debloat import (
+    find_adb,
+    get_device_status,
+    apply_debloat,
+    restore_packages,
+    scan_spyware,
+    audit_apk,
+)
+
+adb_bin = find_adb()
+status = get_device_status(adb_bin, source="uad")
+print(status["summary"])
+```
 
 ## Audit methodology
 
@@ -59,11 +130,6 @@ Package selections in this project come from a direct audit of live devices and 
 Check package status against the bundled UAD-NG database:
 ```bash
 python hyperos_debloat.py status --source uad
-```
-
-Check package status against the audited preset list:
-```bash
-python hyperos_debloat.py status --source preset
 ```
 
 Preview changes without modifying the device:

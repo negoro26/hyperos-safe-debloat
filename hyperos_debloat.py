@@ -2,8 +2,7 @@
 """
 HyperOS Safe Debloat
 Non-destructive debloater, telemetry neutralizer, and audit tool for Xiaomi HyperOS and MIUI.
-Imports and cross-references the Universal Android Debloater (UAD-NG) database.
-Works on Android 14, 15, and 16 over ADB without root.
+Designed for both human operators and automated agents over ADB without root.
 """
 
 import argparse
@@ -17,6 +16,11 @@ from pathlib import Path
 
 UAD_URL = "https://raw.githubusercontent.com/Universal-Debloater-Alliance/universal-android-debloater-next-generation/main/resources/assets/uad_lists.json"
 UAD_LOCAL_FILE = Path(__file__).parent / "uad_lists.json"
+
+# Exit codes for agentic workflows
+EXIT_SUCCESS = 0
+EXIT_ERROR = 1
+EXIT_NO_DEVICE = 2
 
 # Core audited presets
 AUDITED_PRESETS = {
@@ -84,8 +88,13 @@ def run_adb(adb_bin, args, check=False):
         res = subprocess.run(cmd, capture_output=True, text=True, check=check)
         return res.stdout.strip(), res.stderr.strip(), res.returncode
     except FileNotFoundError:
-        print(f"[!] Error: ADB executable not found at '{adb_bin}'.")
-        sys.exit(1)
+        return "", "ADB binary not found", EXIT_ERROR
+
+
+def check_device_connected(adb_bin):
+    """Verify that an authorized device is online."""
+    out, _, code = run_adb(adb_bin, ["get-state"])
+    return code == 0 and "device" in out
 
 
 def get_device_info(adb_bin):
@@ -105,31 +114,26 @@ def get_device_info(adb_bin):
 def load_uad_database():
     """Load or download UAD-NG database."""
     if not UAD_LOCAL_FILE.exists():
-        print(f"[*] Downloading UAD-NG database from {UAD_URL}...")
         try:
             urllib.request.urlretrieve(UAD_URL, UAD_LOCAL_FILE)
-            print("[*] Saved uad_lists.json.")
-        except Exception as e:
-            print(f"[!] Warning: Could not download UAD-NG database: {e}")
+        except Exception:
             return {}
 
     try:
         with open(UAD_LOCAL_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception as e:
-        print(f"[!] Error loading UAD-NG database: {e}")
+    except Exception:
         return {}
 
 
 def sync_uad():
     """Force refresh UAD-NG database from GitHub."""
-    print(f"[*] Fetching latest UAD-NG database from {UAD_URL}...")
     try:
         urllib.request.urlretrieve(UAD_URL, UAD_LOCAL_FILE)
         size_kb = UAD_LOCAL_FILE.stat().st_size / 1024
-        print(f"[*] Successfully updated uad_lists.json ({size_kb:.1f} KB).")
+        return {"status": "success", "file": str(UAD_LOCAL_FILE), "size_kb": round(size_kb, 1)}
     except Exception as e:
-        print(f"[!] Error updating UAD-NG database: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 def get_installed_packages(adb_bin):
@@ -150,7 +154,6 @@ def get_target_packages(adb_bin, source="uad"):
 
     uad_data = load_uad_database()
     if not uad_data:
-        print("[!] UAD-NG database unavailable. Falling back to audited presets.")
         return AUDITED_PRESETS
 
     installed = get_installed_packages(adb_bin)
@@ -160,7 +163,6 @@ def get_target_packages(adb_bin, source="uad"):
         "UAD-NG Recommended (Misc / Diagnostics)": [],
     }
 
-    # Filter out user applications that users typically want to keep
     USER_APP_EXCLUSIONS = {
         "com.whatsapp",
         "com.instagram.android",
@@ -186,7 +188,6 @@ def get_target_packages(adb_bin, source="uad"):
                 elif lst == "Misc":
                     uad_targets["UAD-NG Recommended (Misc / Diagnostics)"].append((pkg, desc))
 
-    # Clean empty categories
     uad_targets = {k: v for k, v in uad_targets.items() if v}
 
     if source == "all":
@@ -218,172 +219,182 @@ def check_appops_restricted(adb_bin, pkg):
     return "ignore" in out.lower()
 
 
-def cmd_status(adb_bin, source="uad"):
-    """Print current status of tracked packages."""
+def get_device_status(adb_bin, source="uad"):
+    """Programmatic API: Gather status of all tracked packages."""
     info = get_device_info(adb_bin)
     targets = get_target_packages(adb_bin, source=source)
 
-    print("=" * 65)
-    print(f" Device: {info['manufacturer']} {info['model']} (Android {info['version']})")
-    print(f" Security Patch: {info['patch']}")
-    print(f" Package Target Source: {source.upper()}")
-    print("=" * 65)
-
-    total_pkgs = sum(len(pkgs) for pkgs in targets.values())
-    print(f"[*] Evaluating {total_pkgs} target packages matching device install list...")
+    results = {
+        "device": info,
+        "source": source,
+        "categories": {},
+        "summary": {"total": 0, "enabled": 0, "disabled": 0, "appops_restricted": 0, "not_found": 0},
+    }
 
     for category, pkgs in targets.items():
-        print(f"\n[ {category} ] ({len(pkgs)})")
+        results["categories"][category] = []
         for pkg, desc in pkgs:
             state = get_package_state(adb_bin, pkg)
             appops_blocked = check_appops_restricted(adb_bin, pkg)
 
+            status = "not_found"
             if state == "DISABLED":
-                tag = "\033[92m[DISABLED]\033[0m"
+                status = "disabled"
+                results["summary"]["disabled"] += 1
             elif appops_blocked:
-                tag = "\033[93m[RESTRICTED-APPOPS]\033[0m"
+                status = "appops_restricted"
+                results["summary"]["appops_restricted"] += 1
             elif state == "ENABLED":
-                tag = "\033[91m[ACTIVE / ENABLED]\033[0m"
+                status = "enabled"
+                results["summary"]["enabled"] += 1
             else:
-                tag = "[NOT FOUND]"
+                results["summary"]["not_found"] += 1
 
-            print(f"  {tag:<28} {pkg}")
-            if desc:
-                print(f"    └─ {desc}")
+            results["summary"]["total"] += 1
+            results["categories"][category].append({
+                "package": pkg,
+                "status": status,
+                "description": desc,
+            })
+
+    return results
 
 
-def cmd_debloat(adb_bin, source="uad", dry_run=False):
-    """Disable or neutralize bloatware packages."""
+def apply_debloat(adb_bin, source="uad", dry_run=False):
+    """Programmatic API: Apply safe debloat rules with AppOps fallback."""
     info = get_device_info(adb_bin)
     targets = get_target_packages(adb_bin, source=source)
 
-    print(f"[*] Target Device: {info['manufacturer']} {info['model']} (Android {info['version']})")
-    print(f"[*] Source Database: {source.upper()}")
-    if dry_run:
-        print("[*] Running in DRY-RUN mode. No changes will be made.\n")
-    else:
-        print("[*] Applying safe Zero-Uninstall debloat...\n")
+    log = []
+    actions_taken = {"disabled": 0, "appops_restricted": 0, "skipped": 0, "already_disabled": 0}
 
     for category, pkgs in targets.items():
-        print(f"\n--- {category} ---")
         for pkg, _ in pkgs:
             if pkg in HARDWARE_WHITELIST:
-                print(f"  [SKIPPED] {pkg} (Protected hardware component)")
+                actions_taken["skipped"] += 1
+                log.append({"package": pkg, "action": "skipped_whitelist", "reason": "protected hardware"})
                 continue
 
             state = get_package_state(adb_bin, pkg)
             if state == "DISABLED":
-                print(f"  [ALREADY DISABLED] {pkg}")
+                actions_taken["already_disabled"] += 1
+                log.append({"package": pkg, "action": "noop", "reason": "already disabled"})
                 continue
 
             if dry_run:
-                print(f"  [WOULD DISABLE/RESTRICT] {pkg}")
+                log.append({"package": pkg, "action": "dry_run", "reason": "would disable or restrict"})
                 continue
 
-            # Step 1: Standard AOSP user disable
+            # Step 1: Try AOSP user disable
             out, err, code = run_adb(adb_bin, ["shell", "pm", "disable-user", "--user", "0", pkg])
             if code == 0 and "disabled-user" in out.lower():
-                print(f"  \033[92m[OK DISABLED]\033[0m {pkg}")
+                actions_taken["disabled"] += 1
+                log.append({"package": pkg, "action": "disabled_user", "method": "pm disable-user"})
             else:
-                # Step 2: AppOps Fallback for Android 14+ protected packages
-                print(f"  \033[93m[APPOPS FALLBACK]\033[0m {pkg} (Protected system package, freezing background)")
+                # Step 2: AppOps Fallback
                 run_adb(adb_bin, ["shell", "cmd", "appops", "set", pkg, "RUN_IN_BACKGROUND", "ignore"])
                 run_adb(adb_bin, ["shell", "cmd", "appops", "set", pkg, "RUN_ANY_IN_BACKGROUND", "ignore"])
                 run_adb(adb_bin, ["shell", "cmd", "appops", "set", pkg, "WAKE_LOCK", "ignore"])
+                actions_taken["appops_restricted"] += 1
+                log.append({"package": pkg, "action": "appops_restricted", "method": "appops freeze"})
 
-    print("\n[*] Debloat operation completed safely.")
+    return {
+        "device": info,
+        "source": source,
+        "dry_run": dry_run,
+        "actions": actions_taken,
+        "details": log,
+    }
 
 
-def cmd_restore(adb_bin, source="all"):
-    """Restore all modified packages to enabled and default state."""
-    print("[*] Restoring packages to default state...\n")
+def restore_packages(adb_bin, source="all"):
+    """Programmatic API: Restore all modified packages to enabled state."""
     targets = get_target_packages(adb_bin, source=source)
+    restored = []
+
     for category, pkgs in targets.items():
         for pkg, _ in pkgs:
             state = get_package_state(adb_bin, pkg)
             if state == "DISABLED":
                 run_adb(adb_bin, ["shell", "pm", "enable", pkg])
-                print(f"  [RE-ENABLED] {pkg}")
             run_adb(adb_bin, ["shell", "cmd", "appops", "set", pkg, "RUN_IN_BACKGROUND", "default"])
             run_adb(adb_bin, ["shell", "cmd", "appops", "set", pkg, "RUN_ANY_IN_BACKGROUND", "default"])
             run_adb(adb_bin, ["shell", "cmd", "appops", "set", pkg, "WAKE_LOCK", "default"])
-    print("\n[*] All packages and permissions restored.")
+            restored.append(pkg)
+
+    return {"status": "restored", "count": len(restored), "packages": restored}
 
 
-def cmd_dexopt(adb_bin):
-    """Run official AOSP profile-guided background dexopt job."""
-    print("[*] Triggering official AOSP profile-guided optimization (bg-dexopt-job)...")
+def run_dexopt(adb_bin):
+    """Programmatic API: Trigger AOSP bg-dexopt-job."""
     out, err, code = run_adb(adb_bin, ["shell", "cmd", "package", "bg-dexopt-job"])
-    print(out if out else "Dexopt triggered.")
+    return {"status": "completed" if code == 0 else "failed", "output": out, "error": err}
 
 
-def cmd_scan_spyware(adb_bin):
-    """Run an MVT forensic scan against Amnesty International indicators."""
+def scan_spyware(adb_bin):
+    """Programmatic API: Run MVT forensic scan."""
     try:
         from mvt.common.indicators import Indicators
     except ImportError:
-        print("[!] Mobile Verification Toolkit (mvt) is not installed.")
-        print("    Install it with: pip install mvt")
-        return
+        return {"status": "error", "message": "mvt package is not installed (pip install mvt)"}
 
     ind = Indicators()
     ind._load_downloaded_indicators()
-    print(f"[*] Loaded {ind.total_ioc_count} MVT Indicators of Compromise.")
 
-    # 1. Packages
     out, _, _ = run_adb(adb_bin, ["shell", "pm", "list", "packages", "-u"])
     packages = [line.replace("package:", "").strip() for line in out.splitlines() if line.startswith("package:")]
-    print(f"[*] Checking {len(packages)} installed packages on device...")
     pkg_matches = [pkg for pkg in packages if ind.check_app_id(pkg)]
-    if pkg_matches:
-        print(f"[!] Warning: {len(pkg_matches)} package matches found: {pkg_matches}")
-    else:
-        print("  [+] Clean: 0 packages match known spyware signatures.")
 
-    # 2. Processes
     out_ps, _, _ = run_adb(adb_bin, ["shell", "ps", "-A"])
     procs = [line.split()[8] for line in out_ps.splitlines() if len(line.split()) >= 9]
-    print(f"[*] Checking {len(procs)} active processes...")
-    proc_matches = [p for p in procs if ind.check_process(p)]
-    real_matches = [p for p in proc_matches if p != "gatekeeperd"]
-    if real_matches:
-        print(f"[!] Warning: {len(real_matches)} suspicious processes found: {real_matches}")
-    else:
-        print("  [+] Clean: 0 suspicious processes found.")
+    proc_matches = [p for p in procs if ind.check_process(p) and p != "gatekeeperd"]
+
+    return {
+        "status": "clean" if (not pkg_matches and not proc_matches) else "threat_detected",
+        "total_iocs_loaded": ind.total_ioc_count,
+        "packages_scanned": len(packages),
+        "package_matches": pkg_matches,
+        "processes_scanned": len(procs),
+        "process_matches": proc_matches,
+    }
 
 
-def cmd_audit_apk(adb_bin, package_name):
-    """Extract and inspect an installed package APK."""
+def audit_apk(adb_bin, package_name):
+    """Programmatic API: Extract and inspect target APK."""
     out, _, _ = run_adb(adb_bin, ["shell", "pm", "path", package_name])
     if not out:
-        print(f"[!] Package '{package_name}' not found on device.")
-        return
+        return {"status": "not_found", "package": package_name}
 
     apk_remote_path = out.splitlines()[0].replace("package:", "").strip()
     out_dir = Path("audit_apks")
     out_dir.mkdir(exist_ok=True)
     local_apk = out_dir / f"{package_name}.apk"
 
-    print(f"[*] Pulling {package_name} from {apk_remote_path}...")
     run_adb(adb_bin, ["pull", apk_remote_path, str(local_apk)])
+    if not local_apk.exists():
+        return {"status": "pull_failed", "package": package_name}
 
-    if local_apk.exists():
-        size_mb = local_apk.stat().st_size / (1024 * 1024)
-        print(f"[*] Saved to {local_apk} ({size_mb:.2f} MB)")
-        droidasc_bin = shutil.which("droidasc")
-        if droidasc_bin:
-            print("[*] Running Droid ASC manifest inspection...")
-            res = subprocess.run([droidasc_bin, "getmanifest", str(local_apk)], capture_output=True, text=True)
-            if res.returncode == 0:
-                print(res.stdout[:1500])
-                print("... [truncated]")
-        else:
-            print("[*] Tip: Install droidasc (pip install droidasc) to decompile and inspect DEX bytecode.")
+    size_mb = local_apk.stat().st_size / (1024 * 1024)
+    res_data = {
+        "status": "extracted",
+        "package": package_name,
+        "remote_path": apk_remote_path,
+        "local_path": str(local_apk),
+        "size_mb": round(size_mb, 2),
+    }
+
+    droidasc_bin = shutil.which("droidasc")
+    if droidasc_bin:
+        res = subprocess.run([droidasc_bin, "getmanifest", str(local_apk)], capture_output=True, text=True)
+        if res.returncode == 0:
+            res_data["manifest_snippet"] = res.stdout[:1000]
+
+    return res_data
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Non-destructive debloater and auditor for Xiaomi HyperOS devices with UAD-NG database integration."
+        description="Non-destructive debloater and auditor for Xiaomi HyperOS devices. Supports JSON output for automated agents."
     )
     parser.add_argument(
         "action",
@@ -406,33 +417,99 @@ def main():
         action="store_true",
         help="Preview changes without executing",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit pure, parseable JSON for automated agents",
+    )
     args = parser.parse_args()
 
     if args.action == "sync-uad":
-        sync_uad()
-        return
+        res = sync_uad()
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(f"[*] Sync result: {res}")
+        sys.exit(EXIT_SUCCESS if res.get("status") == "success" else EXIT_ERROR)
 
     adb_bin = find_adb()
-    out, _, _ = run_adb(adb_bin, ["get-state"])
-    if "device" not in out:
-        print("[!] Error: No authorized ADB device detected. Connect phone and enable USB Debugging.")
-        sys.exit(1)
+    if not check_device_connected(adb_bin):
+        err = {"status": "error", "error": "No authorized ADB device connected"}
+        if args.json:
+            print(json.dumps(err, indent=2))
+        else:
+            print("[!] Error: No authorized ADB device detected. Connect phone and enable USB Debugging.")
+        sys.exit(EXIT_NO_DEVICE)
 
     if args.action == "status":
-        cmd_status(adb_bin, source=args.source)
+        res = get_device_status(adb_bin, source=args.source)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            info = res["device"]
+            print("=" * 65)
+            print(f" Device: {info['manufacturer']} {info['model']} (Android {info['version']})")
+            print(f" Security Patch: {info['patch']}")
+            print(f" Source: {res['source'].upper()}")
+            print(f" Summary: {res['summary']}")
+            print("=" * 65)
+            for cat, items in res["categories"].items():
+                print(f"\n[ {cat} ] ({len(items)})")
+                for it in items:
+                    tag = it["status"].upper()
+                    print(f"  [{tag:<17}] {it['package']}")
+        sys.exit(EXIT_SUCCESS)
+
     elif args.action == "debloat":
-        cmd_debloat(adb_bin, source=args.source, dry_run=args.dry_run)
+        res = apply_debloat(adb_bin, source=args.source, dry_run=args.dry_run)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(f"[*] Debloat completed. Actions: {res['actions']}")
+            for item in res["details"]:
+                print(f"  {item['action'].upper():<17} {item['package']}")
+        sys.exit(EXIT_SUCCESS)
+
     elif args.action == "restore":
-        cmd_restore(adb_bin, source=args.source)
+        res = restore_packages(adb_bin, source=args.source)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(f"[*] Restored {res['count']} packages.")
+        sys.exit(EXIT_SUCCESS)
+
     elif args.action == "dexopt":
-        cmd_dexopt(adb_bin)
+        res = run_dexopt(adb_bin)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(f"[*] Dexopt status: {res['status']}")
+        sys.exit(EXIT_SUCCESS)
+
     elif args.action == "scan-spyware":
-        cmd_scan_spyware(adb_bin)
+        res = scan_spyware(adb_bin)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(f"[*] MVT Scan Result: {res['status']}")
+            print(f"    Scanned: {res['packages_scanned']} packages, {res['processes_scanned']} processes")
+            print(f"    Threats: packages={res['package_matches']}, processes={res['process_matches']}")
+        sys.exit(EXIT_SUCCESS if res.get("status") == "clean" else EXIT_ERROR)
+
     elif args.action == "audit-apk":
         if not args.package:
-            print("[!] Error: Specify a package name to audit, for example: audit-apk com.xiaomi.joyose")
-            sys.exit(1)
-        cmd_audit_apk(adb_bin, args.package)
+            err = {"status": "error", "message": "Missing package argument"}
+            if args.json:
+                print(json.dumps(err, indent=2))
+            else:
+                print("[!] Error: Specify package name (e.g. audit-apk com.xiaomi.joyose)")
+            sys.exit(EXIT_ERROR)
+        res = audit_apk(adb_bin, args.package)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(f"[*] Extracted: {res}")
+        sys.exit(EXIT_SUCCESS)
 
 
 if __name__ == "__main__":
