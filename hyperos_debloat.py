@@ -36,7 +36,6 @@ TARGET_PACKAGES = {
     ],
     "Unused Secondary Services": [
         ("com.wdstechnology.android.kryten", "WDS carrier OTA configuration client"),
-        ("com.miui.vsimcore", "Virtual SIM core service"),
         ("com.miui.thirdappassistant", "Third-party app assistant daemon"),
         ("com.xiaomi.barrage", "Bullet screen notification overlay"),
         ("com.xiaomi.aiasst.vision", "Assistant visual engine daemon"),

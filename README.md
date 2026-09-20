@@ -40,7 +40,6 @@ Package selections in this project come from a direct audit of a live device, ra
 | `com.mediatek.ygps` | MediaTek YGPS test utility | Ignores background execution via AppOps |
 | `com.xiaomi.mtb` | Baseband diagnostic tool | Ignores background execution via AppOps |
 | `com.wdstechnology.android.kryten` | Carrier configuration client | Ignores background execution via AppOps |
-| `com.miui.vsimcore` | Virtual SIM service | Ignores background execution via AppOps |
 | `com.miui.thirdappassistant` | Third-party app assistant | Ignores background execution via AppOps |
 | `com.xiaomi.barrage` | Game bullet screen notification overlay | Ignores background execution via AppOps |
 | `com.xiaomi.aiasst.vision` | Assistant visual engine | Ignores background execution via AppOps |
