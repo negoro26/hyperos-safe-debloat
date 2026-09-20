@@ -169,7 +169,7 @@ def cmd_debloat(adb_bin, dry_run=False):
                 print(f"  \033[92m[OK DISABLED]\033[0m {pkg}")
             else:
                 # Attempt 2: Zero-Uninstall AppOps Fallback for Android 14/15/16 protected packages
-                print(f"  \033[93m[APPOPS FALLBACK]\033[0m {pkg} (Protected system package - freezing background)")
+                print(f"  \033[93m[APPOPS FALLBACK]\033[0m {pkg} (Protected system package, freezing background)")
                 run_adb(adb_bin, ["shell", "cmd", "appops", "set", pkg, "RUN_IN_BACKGROUND", "ignore"])
                 run_adb(adb_bin, ["shell", "cmd", "appops", "set", pkg, "RUN_ANY_IN_BACKGROUND", "ignore"])
                 run_adb(adb_bin, ["shell", "cmd", "appops", "set", pkg, "WAKE_LOCK", "ignore"])
