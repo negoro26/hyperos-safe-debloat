@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import urllib.request
+import re
 from pathlib import Path
 
 UAD_URL = "https://raw.githubusercontent.com/Universal-Debloater-Alliance/universal-android-debloater-next-generation/main/resources/assets/uad_lists.json"
@@ -147,13 +148,13 @@ def sync_uad():
         return {"status": "error", "message": str(e)}
 
 
-def get_installed_packages(adb_bin):
+def get_installed_packages(adb_bin, filter, filter_regex):
     """Fetch set of all installed package names from device."""
-    out, _, _ = run_adb(adb_bin, ["shell", "pm", "list", "packages", "-u"])
-    return {line.replace("package:", "").strip() for line in out.splitlines() if line.startswith("package:")}
+    out, _, _ = run_adb(adb_bin, ["shell", "pm", "list", "packages", f"-{filter}"])
+    return {line.replace("package:", "").strip() for line in out.splitlines() if line.startswith("package:") and (not filter_regex or bool(re.search(filter_regex, line)))}
 
 
-def get_target_packages(adb_bin, source="uad", force_refresh=False):
+def get_target_packages(adb_bin, source="uad", force_refresh=False, filter='u', filter_regex=''):
     """
     Build package targets dictionary based on source selection:
     - 'preset': hand-audited Xiaomi packages
@@ -167,7 +168,7 @@ def get_target_packages(adb_bin, source="uad", force_refresh=False):
     if not uad_data:
         return AUDITED_PRESETS
 
-    installed = get_installed_packages(adb_bin)
+    installed = get_installed_packages(adb_bin, filter, filter_regex)
     uad_targets = {
         "UAD-NG Recommended (OEM)": [],
         "UAD-NG Recommended (Carrier)": [],
@@ -230,10 +231,10 @@ def check_appops_restricted(adb_bin, pkg):
     return "ignore" in out.lower()
 
 
-def get_device_status(adb_bin, source="uad", force_refresh=False):
+def get_device_status(adb_bin, source="uad", force_refresh=False, filter='u', filter_regex=''):
     """Programmatic API: Gather status of all tracked packages."""
     info = get_device_info(adb_bin)
-    targets = get_target_packages(adb_bin, source=source, force_refresh=force_refresh)
+    targets = get_target_packages(adb_bin, source=source, force_refresh=force_refresh, filter=filter, filter_regex=filter_regex)
 
     results = {
         "device": info,
@@ -271,10 +272,10 @@ def get_device_status(adb_bin, source="uad", force_refresh=False):
     return results
 
 
-def apply_debloat(adb_bin, source="uad", dry_run=False, force_refresh=False):
+def apply_debloat(adb_bin, source="uad", dry_run=False, force_refresh=False, filter='u', filter_regex=''):
     """Programmatic API: Apply safe debloat rules with AppOps fallback."""
     info = get_device_info(adb_bin)
-    targets = get_target_packages(adb_bin, source=source, force_refresh=force_refresh)
+    targets = get_target_packages(adb_bin, source=source, force_refresh=force_refresh, filter=filter, filter_regex=filter_regex)
 
     log = []
     actions_taken = {"disabled": 0, "appops_restricted": 0, "skipped": 0, "already_disabled": 0}
@@ -318,9 +319,9 @@ def apply_debloat(adb_bin, source="uad", dry_run=False, force_refresh=False):
     }
 
 
-def restore_packages(adb_bin, source="all"):
+def restore_packages(adb_bin, source="all", filter='u', filter_regex=''):
     """Programmatic API: Restore all modified packages to enabled state."""
-    targets = get_target_packages(adb_bin, source=source)
+    targets = get_target_packages(adb_bin, source=source, filter=filter, filter_regex=filter_regex)
     restored = []
 
     for category, pkgs in targets.items():
@@ -438,6 +439,17 @@ def main():
         action="store_true",
         help="Emit pure, parseable JSON for automated agents",
     )
+    parser.add_argument(
+        "-f", "--filter",
+        choices=['u', 's', '3', 'n', 'a'],
+        default='u',
+        help="Filter specific apps only: u (include uninstalled apps), s (system apps), 3 (third-party apps), e (enabled only), a (all known excepts APEXes)",
+    )
+    parser.add_argument(
+        "-F", "--filter-regex",
+        default='',
+        help="Filter specific apps by regex",
+    )
     args = parser.parse_args()
 
     if args.action == "sync-uad":
@@ -458,7 +470,7 @@ def main():
         sys.exit(EXIT_NO_DEVICE)
 
     if args.action == "status":
-        res = get_device_status(adb_bin, source=args.source, force_refresh=args.refresh_uad)
+        res = get_device_status(adb_bin, source=args.source, force_refresh=args.refresh_uad, filter=args.filter, filter_regex=args.filter_regex)
         if args.json:
             print(json.dumps(res, indent=2))
         else:
@@ -477,7 +489,7 @@ def main():
         sys.exit(EXIT_SUCCESS)
 
     elif args.action == "debloat":
-        res = apply_debloat(adb_bin, source=args.source, dry_run=args.dry_run, force_refresh=args.refresh_uad)
+        res = apply_debloat(adb_bin, source=args.source, dry_run=args.dry_run, force_refresh=args.refresh_uad, filter=args.filter, filter_regex=args.filter_regex)
         if args.json:
             print(json.dumps(res, indent=2))
         else:
@@ -487,7 +499,7 @@ def main():
         sys.exit(EXIT_SUCCESS)
 
     elif args.action == "restore":
-        res = restore_packages(adb_bin, source=args.source)
+        res = restore_packages(adb_bin, source=args.source, filter=args.filter, filter_regex=args.filter_regex)
         if args.json:
             print(json.dumps(res, indent=2))
         else:
